@@ -64,6 +64,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now shop-bot
 journalctl -u shop-bot -f                               # логи
 ```
 
+### Railway и другие PaaS
+Подключите репозиторий (Deploy from GitHub), добавьте переменные из `.env` в Variables и создайте Volume с путём `/data`. Без Volume база и каталог сбросятся при обновлении.
+
 ### Важно
 - Данные (`shop.db`, `catalog.json`) хранятся в папке `DATA_DIR` (по умолчанию — папка проекта, в Docker — `/data`). Делайте её резервную копию.
 - Не запускайте одного бота в двух местах одновременно (например, на ноутбуке и на сервере), иначе Telegram вернёт ошибку `Conflict`.
