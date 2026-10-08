@@ -1,0 +1,275 @@
+{
+  "brands": [
+    {
+      "id": "ap",
+      "name": "Audemars Piguet",
+      "models": [
+        {
+          "id": "ap-roak41",
+          "name": "Royal Oak 15400",
+          "price": 18900,
+          "desc": "Корпус 41 мм, сталь\nМеханика, автоподзавод\nСапфировое стекло, водозащита 50 м",
+          "photo": ""
+        },
+        {
+          "id": "ap-roo",
+          "name": "Royal Oak Offshore",
+          "price": 21900,
+          "desc": "Корпус 42 мм\nХронограф, каучуковый ремешок",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "rolex",
+      "name": "Rolex",
+      "models": [
+        {
+          "id": "rolex-dj41",
+          "name": "Datejust 41",
+          "price": 14900,
+          "desc": "Корпус 41 мм, сталь 904L-стиль\nАвтоподзавод, сапфировое стекло\nБраслет Jubilee",
+          "photo": ""
+        },
+        {
+          "id": "rolex-sub",
+          "name": "Submariner Date",
+          "price": 15900,
+          "desc": "Корпус 41 мм, керамический безель\nВодозащита 300 м",
+          "photo": ""
+        },
+        {
+          "id": "rolex-dd",
+          "name": "Day-Date 40",
+          "price": 19900,
+          "desc": "Жёлтое золото-покрытие, 40 мм\nПризматичный браслет President",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "patek",
+      "name": "Patek Philippe",
+      "models": [
+        {
+          "id": "patek-nau",
+          "name": "Nautilus 5711",
+          "price": 19900,
+          "desc": "Корпус 40 мм, сталь\nГоризонтальный рельеф циферблата, интегрированный браслет",
+          "photo": ""
+        },
+        {
+          "id": "patek-cal",
+          "name": "Calatrava 6119",
+          "price": 16900,
+          "desc": "Корпус 39 мм\nКлассика, кожаный ремешок",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "omega",
+      "name": "Omega",
+      "models": [
+        {
+          "id": "omega-sm",
+          "name": "Seamaster 300M",
+          "price": 9900,
+          "desc": "Корпус 42 мм\nКерамический безель, волнистый циферблат",
+          "photo": ""
+        },
+        {
+          "id": "omega-sp",
+          "name": "Speedmaster Moonwatch",
+          "price": 10900,
+          "desc": "Корпус 42 мм\nХронограф, минеральное/сапфировое стекло",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "casio",
+      "name": "Casio",
+      "models": [
+        {
+          "id": "casio-gs",
+          "name": "G-Shock GA-2100",
+          "price": 1900,
+          "desc": "«CasiOak», октагональный безель\nУдаропрочный, водозащита 200 м",
+          "photo": ""
+        },
+        {
+          "id": "casio-f91",
+          "name": "F-91W",
+          "price": 490,
+          "desc": "Культовая классика\nЭлектронные, подсветка, будильник",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "seiko",
+      "name": "Seiko",
+      "models": [
+        {
+          "id": "seiko-5",
+          "name": "Seiko 5 Sports",
+          "price": 2900,
+          "desc": "Автоподзавод, 100 м\nКорпус 42 мм",
+          "photo": ""
+        },
+        {
+          "id": "seiko-pres",
+          "name": "Presage Cocktail",
+          "price": 4900,
+          "desc": "Автоподзавод\nЦиферблат с градиентом",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "orient",
+      "name": "Orient",
+      "models": [
+        {
+          "id": "orient-bam",
+          "name": "Bambino",
+          "price": 2500,
+          "desc": "Классические, купольное стекло\nАвтоподзавод",
+          "photo": ""
+        },
+        {
+          "id": "orient-kano",
+          "name": "Kamasu",
+          "price": 3100,
+          "desc": "Дайвер, 200 м\nАвтоподзавод",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "tag",
+      "name": "TAG Heuer",
+      "models": [
+        {
+          "id": "tag-carrera",
+          "name": "Carrera Chronograph",
+          "price": 6900,
+          "desc": "Корпус 41 мм\nХронограф, сталь",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "hublot",
+      "name": "Hublot",
+      "models": [
+        {
+          "id": "hublot-bb",
+          "name": "Big Bang",
+          "price": 9900,
+          "desc": "Корпус 44 мм\nКаучуковый ремешок, винты H-образные",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "rm",
+      "name": "Richard Mille",
+      "models": [
+        {
+          "id": "rm-011",
+          "name": "RM 011",
+          "price": 21900,
+          "desc": "Корпус тонневой формы\nХронограф, каучук",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "cartier",
+      "name": "Cartier",
+      "models": [
+        {
+          "id": "cartier-tank",
+          "name": "Tank Must",
+          "price": 5900,
+          "desc": "Прямоугольный корпус\nКожаный ремешок, кварц",
+          "photo": ""
+        },
+        {
+          "id": "cartier-santos",
+          "name": "Santos de Cartier",
+          "price": 8900,
+          "desc": "Корпус 39.8 мм\nБраслет QuickSwitch",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "breitling",
+      "name": "Breitling",
+      "models": [
+        {
+          "id": "breit-nav",
+          "name": "Navitimer B01",
+          "price": 7900,
+          "desc": "Корпус 43 мм\nХронограф, логарифмическая линейка",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "panerai",
+      "name": "Panerai",
+      "models": [
+        {
+          "id": "pan-lum",
+          "name": "Luminor Marina",
+          "price": 7400,
+          "desc": "Корпус 44 мм\nЗащита заводной головки",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "iwc",
+      "name": "IWC",
+      "models": [
+        {
+          "id": "iwc-pilot",
+          "name": "Pilot's Mark XX",
+          "price": 6900,
+          "desc": "Корпус 40 мм\nКлассика авиа-часов",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "tissot",
+      "name": "Tissot",
+      "models": [
+        {
+          "id": "tissot-prx",
+          "name": "PRX Powermatic 80",
+          "price": 3900,
+          "desc": "Корпус 40 мм\nАвтоподзавод, интегрированный браслет",
+          "photo": ""
+        }
+      ]
+    },
+    {
+      "id": "longines",
+      "name": "Longines",
+      "models": [
+        {
+          "id": "long-hc",
+          "name": "HydroConquest",
+          "price": 3500,
+          "desc": "Корпус 41 мм\nДайвер 300 м",
+          "photo": ""
+        }
+      ]
+    }
+  ]
+}
