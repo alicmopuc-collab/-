@@ -39,3 +39,32 @@
 - Клиент может отключить рассылку командой `/stop`; `/start` включает её снова.
 - Заблокировавшие бота помечаются и больше не получают сообщения; в конце бот присылает итог: доставлено / заблокировали / ошибки.
 - Не рассылайте слишком часто: клиенты, получающие много сообщений, жмут «заблокировать».
+
+## Постоянный запуск (хостинг)
+Бот работает, пока запущен `python bot.py`, поэтому для постоянной работы его ставят на сервер. Подойдёт любой VPS (от ~$4–5/мес) с Ubuntu/Debian.
+
+### Вариант 1: Docker (проще всего)
+```bash
+git clone <репозиторий> shop && cd shop
+cp .env.example .env && nano .env      # токен, ADMIN_IDS и т.д.
+docker compose up -d --build           # запуск в фоне, сам поднимается после перезагрузки
+docker compose logs -f                 # логи
+```
+База заказов и `catalog.json` лежат в volume `shop-data` и не пропадают при пересборке.
+Обновление: `git pull && docker compose up -d --build`.
+
+### Вариант 2: systemd (без Docker)
+```bash
+sudo mkdir -p /opt/shop && sudo chown $USER /opt/shop
+git clone <репозиторий> /opt/shop && cd /opt/shop
+python3 -m venv venv && venv/bin/pip install -r requirements.txt
+cp .env.example .env && nano .env
+sudo cp deploy/shop-bot.service /etc/systemd/system/   # поправьте User и пути в файле
+sudo systemctl daemon-reload && sudo systemctl enable --now shop-bot
+journalctl -u shop-bot -f                               # логи
+```
+
+### Важно
+- Данные (`shop.db`, `catalog.json`) хранятся в папке `DATA_DIR` (по умолчанию — папка проекта, в Docker — `/data`). Делайте её резервную копию.
+- Не запускайте одного бота в двух местах одновременно (например, на ноутбуке и на сервере), иначе Telegram вернёт ошибку `Conflict`.
+- Файл `.env` с токеном никогда не коммитьте (он уже в `.gitignore`).

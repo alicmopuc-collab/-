@@ -39,13 +39,18 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split("
 CUR = os.getenv("CURRENCY", "₽")
 SHOP = os.getenv("SHOP_NAME", "Time Boutique")
 CONTACT = os.getenv("CONTACT", "")
-DB_PATH = BASE / "shop.db"
+# Папка с изменяемыми данными (база, каталог). В Docker монтируется как volume.
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "shop.db"
 
 router = Router()
 
 
 # ---------- каталог ----------
-CATALOG_PATH = BASE / "catalog.json"
+CATALOG_PATH = DATA_DIR / "catalog.json"
+if not CATALOG_PATH.exists():  # первый запуск с чистой DATA_DIR: берём каталог-образец из репозитория
+    CATALOG_PATH.write_text((BASE / "catalog.json").read_text(encoding="utf-8"), encoding="utf-8")
 BRANDS: dict = {}
 PRODUCTS: dict = {}
 

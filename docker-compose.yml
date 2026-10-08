@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - shop-data:/data   # база заказов и каталог переживают обновления и перезапуски
+volumes:
+  shop-data:
