@@ -1,0 +1,18 @@
+# Установка на VPS (Ubuntu/Debian):
+#   sudo cp deploy/shop-bot.service /etc/systemd/system/
+#   поправьте User и пути ниже, затем:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now shop-bot
+[Unit]
+Description=Watch shop Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=shop
+WorkingDirectory=/opt/shop
+ExecStart=/opt/shop/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
