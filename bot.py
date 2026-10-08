@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -43,19 +44,48 @@ router = Router()
 
 
 # ---------- каталог ----------
-def load_catalog():
-    data = json.loads((BASE / "catalog.json").read_text(encoding="utf-8"))
-    brands = {b["id"]: b for b in data["brands"]}
-    products = {}
-    for b in data["brands"]:
+CATALOG_PATH = BASE / "catalog.json"
+BRANDS: dict = {}
+PRODUCTS: dict = {}
+
+
+def rebuild():
+    """Пересобирает индекс моделей. Словари меняются на месте, ссылки на них остаются валидными."""
+    PRODUCTS.clear()
+    for b in BRANDS.values():
         for p in b["models"]:
             p["brand"] = b["name"]
             p["brand_id"] = b["id"]
-            products[p["id"]] = p
-    return brands, products
+            PRODUCTS[p["id"]] = p
 
 
-BRANDS, PRODUCTS = load_catalog()
+def load_catalog():
+    data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    BRANDS.clear()
+    BRANDS.update({b["id"]: b for b in data["brands"]})
+    rebuild()
+
+
+def save_catalog():
+    data = {
+        "brands": [
+            {
+                "id": b["id"],
+                "name": b["name"],
+                "models": [
+                    {k: p.get(k, "") for k in ("id", "name", "price", "desc", "photo")} for p in b["models"]
+                ],
+            }
+            for b in BRANDS.values()
+        ]
+    }
+    tmp = CATALOG_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(CATALOG_PATH)
+    rebuild()
+
+
+load_catalog()
 
 
 def money(v) -> str:
@@ -116,7 +146,9 @@ def main_kb(uid):
     kb.button(text=f"🛒 Корзина{f' ({n})' if n else ''}", callback_data="cart")
     kb.button(text="ℹ️ О магазине", callback_data="about")
     kb.button(text="💬 Связаться", callback_data="contact")
-    kb.adjust(1, 1, 2)
+    if uid in ADMIN_IDS:
+        kb.button(text="⚙️ Каталог (админ)", callback_data="ad:menu")
+    kb.adjust(1, 1, 2, 1)
     return kb.as_markup()
 
 
@@ -127,7 +159,8 @@ async def show(cb: CallbackQuery, text: str, kb: InlineKeyboardMarkup, photo: st
     except Exception:
         pass
     if photo:
-        file = photo if photo.startswith("http") else FSInputFile(BASE / photo)
+        # URL и Telegram file_id передаём строкой, локальный файл — как файл
+        file = FSInputFile(BASE / photo) if (BASE / photo).is_file() else photo
         try:
             await cb.message.answer_photo(file, caption=text, reply_markup=kb)
             return
@@ -203,6 +236,8 @@ MAX_RESULTS = 30
 def price_buckets():
     """Четыре диапазона по квартилям цен каталога: [(lo, hi)], hi=0 — без верхней границы."""
     prices = sorted(p["price"] for p in PRODUCTS.values())
+    if not prices:
+        return []
     step = 1000 if prices[-1] >= 10000 else 100
     edges = sorted({max(step, round(prices[len(prices) * k // 4] / step) * step) for k in (1, 2, 3)})
     bounds = [0, *edges, 0]
@@ -316,7 +351,10 @@ async def price_run(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("b:"))
 async def brand(cb: CallbackQuery):
-    b = BRANDS[cb.data[2:]]
+    b = BRANDS.get(cb.data[2:])
+    if not b:
+        await cb.answer("Бренд больше недоступен", show_alert=True)
+        return
     kb = InlineKeyboardBuilder()
     for p in b["models"]:
         kb.button(text=f"{p['name']} — {money(p['price'])}", callback_data=f"m:{p['id']}")
@@ -328,7 +366,10 @@ async def brand(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("m:"))
 async def model(cb: CallbackQuery):
-    p = PRODUCTS[cb.data[2:]]
+    p = PRODUCTS.get(cb.data[2:])
+    if not p:
+        await cb.answer("Модель больше недоступна", show_alert=True)
+        return
     text = (
         f"<b>{html.escape(p['brand'])} {html.escape(p['name'])}</b>\n"
         f"<i>Реплика высокого качества</i>\n\n"
@@ -347,6 +388,9 @@ async def model(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("add:"))
 async def add(cb: CallbackQuery):
     pid = cb.data[4:]
+    if pid not in PRODUCTS:
+        await cb.answer("Модель больше недоступна", show_alert=True)
+        return
     cart_change(cb.from_user.id, pid, 1)
     await cb.answer("Добавлено в корзину ✅")
     # обновить счётчик на кнопке корзины
@@ -543,6 +587,331 @@ async def orders(m: Message):
         await m.answer(text, reply_markup=kb)
 
 
+# ---------- админ: редактирование каталога ----------
+admin = Router()
+admin.message.filter(F.from_user.id.in_(ADMIN_IDS))
+admin.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
+
+FIELDS = {"name": "название", "price": "цену (числом)", "desc": "описание", "photo": "фото"}
+LIMITS = {"name": 60, "desc": 600}
+
+
+class Edit(StatesGroup):
+    brand_name = State()
+    name = State()
+    price = State()
+    desc = State()
+    photo = State()
+    field = State()
+
+
+def kb_of(*rows):
+    """rows: списки (текст, callback_data)."""
+    kb = InlineKeyboardBuilder()
+    for row in rows:
+        kb.row(*[InlineKeyboardButton(text=t, callback_data=d) for t, d in row])
+    return kb.as_markup()
+
+
+def new_id(prefix):
+    while True:
+        i = f"{prefix}-{secrets.token_hex(3)}"
+        if i not in PRODUCTS and i not in BRANDS:
+            return i
+
+
+def admin_menu():
+    return "<b>⚙️ Редактор каталога</b>", kb_of(
+        [("➕ Добавить модель", "ad:add")],
+        [("✏️ Изменить / удалить модель", "ad:edit")],
+        [("➕ Новый бренд", "ad:nb"), ("🗑 Удалить бренд", "ad:db")],
+        [("◀️ Меню", "home")],
+    )
+
+
+def brand_picker(prefix, title, extra=()):
+    kb = InlineKeyboardBuilder()
+    for b in BRANDS.values():
+        kb.button(text=b["name"], callback_data=f"{prefix}:{b['id']}")
+    kb.adjust(2)
+    for t, d in extra:
+        kb.row(InlineKeyboardButton(text=t, callback_data=d))
+    kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="ad:menu"))
+    return title, kb.as_markup()
+
+
+def admin_card(p):
+    text = (
+        f"<b>{html.escape(p['brand'])} {html.escape(p['name'])}</b>\n"
+        f"Цена: {money(p['price'])}\n"
+        f"Фото: {'есть' if p.get('photo') else 'нет'}\n\n{html.escape(p['desc'])}"
+    )
+    return text, kb_of(
+        [("Название", f"af:name:{p['id']}"), ("Цена", f"af:price:{p['id']}")],
+        [("Описание", f"af:desc:{p['id']}"), ("Фото", f"af:photo:{p['id']}")],
+        [("🗑 Удалить модель", f"ax:{p['id']}")],
+        [("◀️ К списку", f"ae:{p['brand_id']}")],
+    )
+
+
+@admin.message(Command("admin"))
+async def admin_cmd(m: Message, state: FSMContext):
+    await state.clear()
+    text, kb = admin_menu()
+    await m.answer(text, reply_markup=kb)
+
+
+@admin.callback_query(F.data == "ad:menu")
+async def admin_menu_cb(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    text, kb = admin_menu()
+    await show(cb, text, kb)
+    await cb.answer()
+
+
+# --- бренды ---
+@admin.callback_query(F.data == "ad:nb")
+async def brand_new(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Edit.brand_name)
+    await state.update_data(then=None)
+    await show(cb, "Название нового бренда:", kb_of([("◀️ Отмена", "ad:menu")]))
+    await cb.answer()
+
+
+@admin.message(Edit.brand_name, F.text, ~F.text.startswith("/"))
+async def brand_new_name(m: Message, state: FSMContext):
+    name = m.text.strip()[:40]
+    if not name:
+        await m.answer("Введите название.")
+        return
+    bid = new_id("b")
+    BRANDS[bid] = {"id": bid, "name": name, "models": []}
+    save_catalog()
+    data = await state.get_data()
+    await state.clear()
+    if data.get("then") == "add_model":
+        await state.update_data(brand_id=bid)
+        await state.set_state(Edit.name)
+        await m.answer(f"Бренд «{html.escape(name)}» создан ✅\nНазвание модели:")
+    else:
+        text, kb = admin_menu()
+        await m.answer(f"Бренд «{html.escape(name)}» создан ✅\n\n{text}", reply_markup=kb)
+
+
+@admin.callback_query(F.data == "ad:db")
+async def brand_del(cb: CallbackQuery):
+    text, kb = brand_picker("adb", "Какой бренд удалить? Вместе с ним удалятся все его модели.")
+    await show(cb, text, kb)
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("adb:"))
+async def brand_del_ask(cb: CallbackQuery):
+    b = BRANDS.get(cb.data[4:])
+    if not b:
+        await cb.answer("Нет такого бренда", show_alert=True)
+        return
+    await show(
+        cb,
+        f"Удалить бренд <b>{html.escape(b['name'])}</b> и моделей: {len(b['models'])}?",
+        kb_of([("🗑 Да, удалить", f"adc:{b['id']}")], [("◀️ Отмена", "ad:menu")]),
+    )
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("adc:"))
+async def brand_del_do(cb: CallbackQuery):
+    BRANDS.pop(cb.data[4:], None)
+    save_catalog()
+    text, kb = admin_menu()
+    await show(cb, "Бренд удалён ✅\n\n" + text, kb)
+    await cb.answer()
+
+
+# --- добавить модель ---
+@admin.callback_query(F.data == "ad:add")
+async def model_add(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    text, kb = brand_picker("aa", "Выберите бренд для новой модели:", [("➕ Новый бренд", "aa:new")])
+    await show(cb, text, kb)
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("aa:"))
+async def model_add_brand(cb: CallbackQuery, state: FSMContext):
+    key = cb.data[3:]
+    if key == "new":
+        await state.set_state(Edit.brand_name)
+        await state.update_data(then="add_model")
+        await show(cb, "Название нового бренда:", kb_of([("◀️ Отмена", "ad:menu")]))
+    elif key in BRANDS:
+        await state.set_state(Edit.name)
+        await state.update_data(brand_id=key)
+        await show(cb, "Название модели:", kb_of([("◀️ Отмена", "ad:menu")]))
+    await cb.answer()
+
+
+@admin.message(Edit.name, F.text, ~F.text.startswith("/"))
+async def add_name(m: Message, state: FSMContext):
+    name = m.text.strip()[: LIMITS["name"]]
+    if not name:
+        await m.answer("Введите название.")
+        return
+    await state.update_data(name=name)
+    await state.set_state(Edit.price)
+    await m.answer(f"Цена, {CUR} (только число):")
+
+
+def parse_price(text):
+    digits = re.sub(r"[\s_,.]", "", text or "")
+    return int(digits) if digits.isdigit() and int(digits) > 0 else None
+
+
+@admin.message(Edit.price, F.text, ~F.text.startswith("/"))
+async def add_price(m: Message, state: FSMContext):
+    price = parse_price(m.text)
+    if price is None:
+        await m.answer("Нужно число больше нуля, например 12900.")
+        return
+    await state.update_data(price=price)
+    await state.set_state(Edit.desc)
+    await m.answer("Описание (несколько строк можно). Или «-», чтобы оставить пустым:")
+
+
+@admin.message(Edit.desc, F.text, ~F.text.startswith("/"))
+async def add_desc(m: Message, state: FSMContext):
+    desc = "" if m.text.strip() == "-" else m.text.strip()[: LIMITS["desc"]]
+    await state.update_data(desc=desc)
+    await state.set_state(Edit.photo)
+    await m.answer("Пришлите фото модели (или ссылку на него). Или «-», чтобы добавить без фото:")
+
+
+def photo_from(m: Message):
+    """Фото из сообщения: file_id, ссылка, '' (без фото) или None (непонятный ввод)."""
+    if m.photo:
+        return m.photo[-1].file_id
+    t = (m.text or "").strip()
+    if t == "-":
+        return ""
+    return t if t.startswith("http") else None
+
+
+@admin.message(Edit.photo, ~F.text.startswith("/"))
+async def add_photo(m: Message, state: FSMContext):
+    photo = photo_from(m)
+    if photo is None:
+        await m.answer("Пришлите фото, ссылку на него или «-».")
+        return
+    d = await state.get_data()
+    pid = new_id(d["brand_id"])
+    BRANDS[d["brand_id"]]["models"].append(
+        {"id": pid, "name": d["name"], "price": d["price"], "desc": d["desc"], "photo": photo}
+    )
+    save_catalog()
+    await state.clear()
+    text, kb = admin_card(PRODUCTS[pid])
+    await m.answer("Модель добавлена ✅\n\n" + text, reply_markup=kb)
+
+
+# --- изменить / удалить модель ---
+@admin.callback_query(F.data == "ad:edit")
+async def model_edit(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    text, kb = brand_picker("ae", "Выберите бренд:")
+    await show(cb, text, kb)
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("ae:"))
+async def model_edit_list(cb: CallbackQuery):
+    b = BRANDS.get(cb.data[3:])
+    if not b:
+        await cb.answer("Нет такого бренда", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    for p in b["models"]:
+        kb.button(text=f"{p['name']} — {money(p['price'])}", callback_data=f"am:{p['id']}")
+    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="ad:edit"))
+    await show(cb, f"<b>{html.escape(b['name'])}</b>: выберите модель" if b["models"] else "Моделей пока нет.", kb.as_markup())
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("am:"))
+async def model_card(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    p = PRODUCTS.get(cb.data[3:])
+    if not p:
+        await cb.answer("Модель не найдена", show_alert=True)
+        return
+    text, kb = admin_card(p)
+    await show(cb, text, kb, p.get("photo") or None)
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("af:"))
+async def field_ask(cb: CallbackQuery, state: FSMContext):
+    _, field, pid = cb.data.split(":", 2)
+    if pid not in PRODUCTS or field not in FIELDS:
+        await cb.answer("Модель не найдена", show_alert=True)
+        return
+    await state.set_state(Edit.field)
+    await state.update_data(pid=pid, field=field)
+    hint = " Или «-», чтобы убрать фото." if field == "photo" else ""
+    await cb.message.answer(f"Новое значение: {FIELDS[field]}.{hint}", reply_markup=kb_of([("◀️ Отмена", f"am:{pid}")]))
+    await cb.answer()
+
+
+@admin.message(Edit.field, ~F.text.startswith("/"))
+async def field_save(m: Message, state: FSMContext):
+    d = await state.get_data()
+    p = PRODUCTS.get(d["pid"])
+    if not p:
+        await state.clear()
+        await m.answer("Модель уже удалена.")
+        return
+    field = d["field"]
+    if field == "photo":
+        value = photo_from(m)
+    elif field == "price":
+        value = parse_price(m.text)
+    else:
+        value = (m.text or "").strip()[: LIMITS[field]] or None
+    if value is None:
+        await m.answer("Не подходит, попробуйте ещё раз.")
+        return
+    p[field] = value
+    save_catalog()
+    await state.clear()
+    text, kb = admin_card(PRODUCTS[p["id"]])
+    await m.answer("Сохранено ✅\n\n" + text, reply_markup=kb)
+
+
+@admin.callback_query(F.data.startswith("ax:"))
+async def model_del_ask(cb: CallbackQuery):
+    p = PRODUCTS.get(cb.data[3:])
+    if not p:
+        await cb.answer("Модель не найдена", show_alert=True)
+        return
+    await show(
+        cb,
+        f"Удалить <b>{html.escape(p['brand'])} {html.escape(p['name'])}</b>?",
+        kb_of([("🗑 Да, удалить", f"axc:{p['id']}")], [("◀️ Отмена", f"am:{p['id']}")]),
+    )
+    await cb.answer()
+
+
+@admin.callback_query(F.data.startswith("axc:"))
+async def model_del_do(cb: CallbackQuery):
+    p = PRODUCTS.get(cb.data[4:])
+    if p:
+        BRANDS[p["brand_id"]]["models"].remove(p)
+        save_catalog()
+    text, kb = admin_menu()
+    await show(cb, "Модель удалена ✅\n\n" + text, kb)
+    await cb.answer()
+
+
 @router.message(Command("id"))
 async def my_id(m: Message):
     await m.answer(f"Ваш ID: <code>{m.from_user.id}</code>")
@@ -554,6 +923,7 @@ async def main():
         log.warning("ADMIN_IDS не задан — уведомления о заказах приходить не будут")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
+    dp.include_router(admin)
     dp.include_router(router)
     await dp.start_polling(bot)
 
