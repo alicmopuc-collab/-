@@ -12,6 +12,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -106,6 +107,10 @@ def init_db():
             CREATE TABLE IF NOT EXISTS cart(
                 user_id INTEGER, product_id TEXT, qty INTEGER,
                 PRIMARY KEY(user_id, product_id));
+            CREATE TABLE IF NOT EXISTS users(
+                user_id INTEGER PRIMARY KEY, name TEXT, username TEXT,
+                subscribed INTEGER DEFAULT 1, blocked INTEGER DEFAULT 0,
+                joined TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS orders(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER, username TEXT, name TEXT, contact TEXT,
@@ -177,9 +182,31 @@ def welcome():
     )
 
 
+async def track_user(handler, event, data):
+    """Запоминает каждого, кто писал боту — это база для рассылки."""
+    u = event.from_user
+    if u and not u.is_bot:
+        with closing(db()) as con, con:
+            con.execute(
+                "INSERT INTO users(user_id, name, username) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name, username=excluded.username, blocked=0",
+                (u.id, u.full_name, u.username),
+            )
+    return await handler(event, data)
+
+
+@router.message(Command("stop"))
+async def stop(m: Message):
+    with closing(db()) as con, con:
+        con.execute("UPDATE users SET subscribed=0 WHERE user_id=?", (m.from_user.id,))
+    await m.answer("Рассылка отключена. Чтобы включить снова, нажмите /start.")
+
+
 @router.message(CommandStart())
 async def start(m: Message, state: FSMContext):
     await state.clear()
+    with closing(db()) as con, con:
+        con.execute("UPDATE users SET subscribed=1 WHERE user_id=?", (m.from_user.id,))
     await m.answer(welcome(), reply_markup=main_kb(m.from_user.id))
 
 
@@ -625,6 +652,7 @@ def admin_menu():
         [("➕ Добавить модель", "ad:add")],
         [("✏️ Изменить / удалить модель", "ad:edit")],
         [("➕ Новый бренд", "ad:nb"), ("🗑 Удалить бренд", "ad:db")],
+        [("📣 Рассылка клиентам", "ad:bc")],
         [("◀️ Меню", "home")],
     )
 
@@ -912,6 +940,82 @@ async def model_del_do(cb: CallbackQuery):
     await cb.answer()
 
 
+# --- рассылка ---
+class Broadcast(StatesGroup):
+    msg = State()
+
+
+def recipients():
+    with closing(db()) as con:
+        rows = con.execute("SELECT user_id FROM users WHERE subscribed=1 AND blocked=0").fetchall()
+    return [r["user_id"] for r in rows]
+
+
+@admin.callback_query(F.data == "ad:bc")
+async def bc_start(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Broadcast.msg)
+    await show(
+        cb,
+        f"<b>📣 Рассылка</b>\n\nПолучателей: {len(recipients())}\n"
+        "Пришлите сообщение, которое нужно разослать: текст или фото с подписью. "
+        "Перед отправкой я покажу предпросмотр.",
+        kb_of([("◀️ Отмена", "ad:menu")]),
+    )
+    await cb.answer()
+
+
+@admin.message(Broadcast.msg, ~F.text.startswith("/"))
+async def bc_preview(m: Message, state: FSMContext):
+    n = len(recipients())
+    await state.update_data(msg_id=m.message_id)
+    await m.answer("Так увидят клиенты 👇")
+    try:
+        await m.copy_to(m.chat.id)
+    except TelegramAPIError:
+        await m.answer("Этот тип сообщения не получится разослать. Пришлите текст или фото.")
+        return
+    await m.answer(
+        f"Отправить {n} получателям?",
+        reply_markup=kb_of([(f"✅ Отправить ({n})", "bc:go")], [("❌ Отмена", "ad:menu")]),
+    )
+
+
+@admin.callback_query(F.data == "bc:go")
+async def bc_send(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    msg_id = data.get("msg_id")
+    await state.clear()
+    if not msg_id:
+        await cb.answer("Сообщение не найдено, начните заново", show_alert=True)
+        return
+    ids = recipients()
+    await cb.message.edit_text(f"Отправляю {len(ids)} получателям…")
+    await cb.answer()
+    sent = blocked = failed = 0
+    for uid in ids:
+        for attempt in (1, 2):
+            try:
+                await cb.bot.copy_message(uid, cb.message.chat.id, msg_id)
+                sent += 1
+            except TelegramRetryAfter as e:
+                if attempt == 1:
+                    await asyncio.sleep(e.retry_after + 1)
+                    continue
+                failed += 1
+            except TelegramForbiddenError:
+                blocked += 1
+                with closing(db()) as con, con:
+                    con.execute("UPDATE users SET blocked=1 WHERE user_id=?", (uid,))
+            except TelegramAPIError as e:
+                log.warning("broadcast to %s failed: %s", uid, e)
+                failed += 1
+            break
+        await asyncio.sleep(0.05)  # ~20 сообщений/с, в рамках лимитов Telegram
+    await cb.message.answer(
+        f"Рассылка завершена ✅\nДоставлено: {sent}\nЗаблокировали бота: {blocked}\nОшибок: {failed}"
+    )
+
+
 @router.message(Command("id"))
 async def my_id(m: Message):
     await m.answer(f"Ваш ID: <code>{m.from_user.id}</code>")
@@ -923,6 +1027,8 @@ async def main():
         log.warning("ADMIN_IDS не задан — уведомления о заказах приходить не будут")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
+    dp.message.outer_middleware(track_user)
+    dp.callback_query.outer_middleware(track_user)
     dp.include_router(admin)
     dp.include_router(router)
     await dp.start_polling(bot)
