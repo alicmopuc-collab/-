@@ -3,6 +3,7 @@ import html
 import json
 import logging
 import os
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -180,13 +181,136 @@ async def contact(cb: CallbackQuery):
 
 # ---------- каталог ----------
 @router.callback_query(F.data == "catalog")
-async def catalog(cb: CallbackQuery):
+async def catalog(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
     kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🔍 Поиск", callback_data="search"),
+        InlineKeyboardButton(text="💰 По цене", callback_data="price"),
+    )
     for b in BRANDS.values():
         kb.button(text=b["name"], callback_data=f"b:{b['id']}")
     kb.adjust(2)
     kb.row(InlineKeyboardButton(text="◀️ Меню", callback_data="home"))
     await show(cb, "<b>Выберите бренд</b>", kb.as_markup())
+    await cb.answer()
+
+
+# ---------- поиск и фильтр по цене ----------
+MAX_RESULTS = 30
+
+
+def price_buckets():
+    """Четыре диапазона по квартилям цен каталога: [(lo, hi)], hi=0 — без верхней границы."""
+    prices = sorted(p["price"] for p in PRODUCTS.values())
+    step = 1000 if prices[-1] >= 10000 else 100
+    edges = sorted({max(step, round(prices[len(prices) * k // 4] / step) * step) for k in (1, 2, 3)})
+    bounds = [0, *edges, 0]
+    return [(bounds[i], bounds[i + 1]) for i in range(len(bounds) - 1)]
+
+
+def bucket_label(lo, hi):
+    if not lo:
+        return f"до {money(hi)}"
+    if not hi:
+        return f"от {money(lo)}"
+    return f"{money(lo)} – {money(hi)}"
+
+
+def in_range(price, lo, hi):
+    return price >= lo and (not hi or price <= hi)
+
+
+def results_view(title, items, back="catalog"):
+    items = sorted(items, key=lambda p: p["price"])
+    kb = InlineKeyboardBuilder()
+    if not items:
+        kb.button(text="🔍 Искать ещё", callback_data="search")
+        kb.button(text="◀️ Каталог", callback_data=back)
+        kb.adjust(1)
+        return f"{title}\n\nНичего не найдено.", kb.as_markup()
+    for p in items[:MAX_RESULTS]:
+        kb.button(text=f"{p['brand']} {p['name']} — {money(p['price'])}", callback_data=f"m:{p['id']}")
+    kb.adjust(1)
+    kb.row(
+        InlineKeyboardButton(text="🔍 Поиск", callback_data="search"),
+        InlineKeyboardButton(text="💰 По цене", callback_data="price"),
+    )
+    kb.row(InlineKeyboardButton(text="◀️ Каталог", callback_data=back))
+    more = f"\n(показаны первые {MAX_RESULTS} из {len(items)})" if len(items) > MAX_RESULTS else ""
+    return f"{title}\nНайдено: {len(items)}{more}", kb.as_markup()
+
+
+class Search(StatesGroup):
+    query = State()
+
+
+@router.callback_query(F.data == "search")
+async def search_start(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Search.query)
+    kb = InlineKeyboardBuilder().button(text="◀️ Каталог", callback_data="catalog").as_markup()
+    await show(
+        cb,
+        "<b>Поиск</b>\n\nНапишите бренд или модель, например <i>rolex</i> или <i>submariner</i>.\n"
+        "Можно искать по цене: <i>5000-10000</i>, <i>до 5000</i> или <i>от 10000</i>.",
+        kb,
+    )
+    await cb.answer()
+
+
+RANGE_RE = re.compile(r"^\s*(?:(\d[\d\s]*)\s*[-–—]\s*(\d[\d\s]*)|(до)\s*(\d[\d\s]*)|(от)\s*(\d[\d\s]*))\s*$", re.I)
+
+
+def parse_range(text):
+    m = RANGE_RE.match(text)
+    if not m:
+        return None
+    num = lambda s: int(re.sub(r"\s", "", s))
+    if m.group(1):
+        lo, hi = sorted((num(m.group(1)), num(m.group(2))))
+        return lo, hi
+    if m.group(3):
+        return 0, num(m.group(4))
+    return num(m.group(6)), 0
+
+
+@router.message(Search.query, F.text, ~F.text.startswith("/"))
+async def search_run(m: Message, state: FSMContext):
+    q = m.text.strip().lower()
+    rng = parse_range(q)
+    if rng:
+        found = [p for p in PRODUCTS.values() if in_range(p["price"], *rng)]
+        title = f"<b>Цена: {bucket_label(*rng)}</b>"
+    else:
+        words = q.split()
+        found = [
+            p for p in PRODUCTS.values()
+            if all(w in f"{p['brand']} {p['name']} {p['desc']}".lower() for w in words)
+        ]
+        title = f"<b>Поиск: {html.escape(q)}</b>"
+    await state.clear()
+    text, kb = results_view(title, found)
+    await m.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "price")
+async def price_menu(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    for lo, hi in price_buckets():
+        kb.button(text=bucket_label(lo, hi), callback_data=f"p:{lo}:{hi}")
+    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text="◀️ Каталог", callback_data="catalog"))
+    await show(cb, "<b>Выберите ценовой диапазон</b>", kb.as_markup())
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("p:"))
+async def price_run(cb: CallbackQuery):
+    lo, hi = (int(x) for x in cb.data[2:].split(":"))
+    found = [p for p in PRODUCTS.values() if in_range(p["price"], lo, hi)]
+    text, kb = results_view(f"<b>Цена: {bucket_label(lo, hi)}</b>", found, back="price")
+    await show(cb, text, kb)
     await cb.answer()
 
 
@@ -265,7 +389,8 @@ def cart_view(uid):
 
 
 @router.callback_query(F.data == "cart")
-async def cart(cb: CallbackQuery):
+async def cart(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
     text, kb = cart_view(cb.from_user.id)
     await show(cb, text, kb)
     await cb.answer()
